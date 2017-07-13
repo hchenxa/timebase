@@ -46,7 +46,6 @@ type policy struct {
 type policySpec struct {
 	Action      actionSpec      `json:"action"`
 	Schedule    string          `json:"schedule"`
-	JobTemplate jobTemplateSpec `json:"jobTemplate"`
 	ScaleTargetRef   CrossVersionObjectReference  `json:"scaleTargetRef" protobuf:"bytes,1,opt,name=scaleTargetRef"`
 	TargetReplicas *int32 `json:"replicas,omitempty" protobuf:"varint,2,opt,name=replicas"`
 }
@@ -66,12 +65,19 @@ type actionSpec struct {
 	ScaleDown    string      `json:"scaleDown"`
 }
 
+type PolicyLister struct {
+	cache.Store
+}
+
 type TimebasedController struct {
+	cfg *Configuration
+
 	scaleNamespacer extensionsclient.ScalesGetter
 	hpaNamespacer   autoscalingclient.HorizontalPodAutoscalersGetter
 
   policyController cache.Controller
   policyLister     PolicyLister
+
   stopCh chan struct{}
 }
 
@@ -87,7 +93,7 @@ func NewTimebasedController(config *Configuration) *TimebasedController {
 	}
 
 	policy.policyLister.Store, policy.policyController = cache.NewInformer(
-		cache.NewListWatchFromClient(urc.cfg.Client.Core().RESTClient(policyEndpoint), "policies", api.NamespaceAll, fields.Everything()),
+		cache.NewListWatchFromClient(policy.cfg.Client.Apps().RESTClient(), "policies", api.NamespaceAll, fields.Everything()),
 		&Policy{}, policy.cfg.ResyncPeriod, cache.ResourceEventHandlerFuncs{})
 
 	return policy
@@ -166,22 +172,22 @@ func (a *NewTimebasedController) reconcileAutoscaler(p *policy, now time.Time) e
 	currentReplicas := scale.Status.Replicas
 
 	if p.Spec.Action == "scaleUp" {
-		if p.Spec.Replicas <= currentReplicas {
+		if p.Spec.TargetReplicas <= currentReplicas {
 			glog.V(4).Infof("The request replicas was less than current replicas, no need to scale up")
 			return
 		} else {
-			scale.Spec.Replicas = p.Spec.Replicas
+			scale.Spec.Replicas = p.Spec.TargetReplicas
 			_, err = p.scaleNamespacer.Scales(p.Namespace).Update(p.Spec.ScaleTargetRef.Kind, scale)
 			if err != nil {
 				return fmt.Errorf("failed to rescale %s: %v", reference, err)
 			}
 		}
 	} else {
-		if p.Spec.Replicas >= currentReplicas {
+		if p.Spec.TargetReplicas >= currentReplicas {
 			glog.V(4).Infof("the request replicas was large than replicas, no need to scale down")
 			return
 		} else {
-			scale.Spec.Replicas = p.Spec.Replicas
+			scale.Spec.Replicas = p.Spec.TargetReplicas
 			_, err = p.scaleNamespacer.Scales(p.Namespace).Update(p.Spec.ScaleTargetRef.Kind, scale)
 			if err != nil {
 				return fmt.Errorf("failed to rescale %s: %v", reference, err)
@@ -243,7 +249,7 @@ func main() {
     }
     log.Printf("Successful initial request to the apiserver, version: %s", versionInfo.String())
 
-    pc := controller.NewTimebasedController(&controller.Configuration{
+    pc := NewTimebasedController(&controller.Configuration{
         Client:       apiserverClient,
         ResyncPeriod: 5 * time.Minute,
     })
