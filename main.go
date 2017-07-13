@@ -2,34 +2,18 @@ package main
 
 import (
 	"fmt"
-	"math"
 	"time"
 
 	"github.com/golang/glog"
-	autoscalingv1 "k8s.io/api/autoscaling/v1"
-	autoscalingv2 "k8s.io/api/autoscaling/v2alpha1"
-	"k8s.io/api/core/v1"
-	clientv1 "k8s.io/api/core/v1"
-	extensions "k8s.io/api/extensions/v1beta1"
-	apiequality "k8s.io/apimachinery/pkg/api/equality"
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	"k8s.io/apimachinery/pkg/util/wait"
-	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
+	"github.com/robfig/cron"
+	"k8s.io/client-go/kubernetes"
+	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/tools/record"
-	"k8s.io/client-go/util/workqueue"
-	"k8s.io/kubernetes/pkg/api"
-	autoscalingclient "k8s.io/kubernetes/pkg/client/clientset_generated/clientset/typed/autoscaling/v1"
 	extensionsclient "k8s.io/kubernetes/pkg/client/clientset_generated/clientset/typed/extensions/v1beta1"
-	autoscalinginformers "k8s.io/kubernetes/pkg/client/informers/informers_generated/externalversions/autoscaling/v1"
-	autoscalinglisters "k8s.io/kubernetes/pkg/client/listers/autoscaling/v1"
-	"k8s.io/kubernetes/pkg/controller"
+	autoscalingclient "k8s.io/kubernetes/pkg/client/clientset_generated/clientset/typed/autoscaling/v1"
+	"k8s.io/client-go/rest"
+	"github.com/spf13/pflag"
+
 )
 
 const (
@@ -130,7 +114,7 @@ func (a *NewTimebasedController) worker() {
 
 func getRecentUnmetScheduleTimes(p policy, now time.Time) ([]time.Time, error) {
 	starts := []time.Time{}
-	sched, err := p.ParseStandard(p.Spec.Schedule)
+	sched, err := cron.ParseStandard(p.Spec.Schedule)
 	if err != nil {
 		return starts, fmt.Errorf("Unparseable schedule: %s : %s", sj.Spec.Schedule, err)
 	}
@@ -139,12 +123,7 @@ func getRecentUnmetScheduleTimes(p policy, now time.Time) ([]time.Time, error) {
 	if p.Status.LastScheduleTime != nil {
 		earliestTime = p.Status.LastScheduleTime.Time
 	} else {
-		// If none found, then this is either a recently created scheduledJob,
-		// or the active/completed info was somehow lost (contract for status
-		// in kubernetes says it may need to be recreated), or that we have
-		// started a job, but have not noticed it yet (distributed systems can
-		// have arbitrary delays).  In any case, use the creation time of the
-		// CronJob as last known start time.
+
 		earliestTime = p.ObjectMeta.CreationTimestamp.Time
 	}
 	if earliestTime.After(now) {
@@ -153,23 +132,7 @@ func getRecentUnmetScheduleTimes(p policy, now time.Time) ([]time.Time, error) {
 
 	for t := sched.Next(earliestTime); !t.After(now); t = sched.Next(t) {
 		starts = append(starts, t)
-		// An object might miss several starts.  For example, if
-		// controller gets wedged on friday at 5:01pm when everyone has
-		// gone home, and someone comes in on tuesday AM and discovers
-		// the problem and restarts the controller, then all the hourly
-		// jobs, more than 80 of them for one hourly scheduledJob, should
-		// all start running with no further intervention (if the scheduledJob
-		// allows concurrency and late starts).
-		//
-		// However, if there is a bug somewhere, or incorrect clock
-		// on controller's server or apiservers (for setting creationTimestamp)
-		// then there could be so many missed start times (it could be off
-		// by decades or more), that it would eat up all the CPU and memory
-		// of this controller. In that case, we want to not try to list
-		// all the misseded start times.
-		//
-		// I've somewhat arbitrarily picked 100, as more than 80, but
-		// but less than "lots".
+
 		if len(starts) > 100 {
 			// We can't get the most recent times so just return an empty slice
 			return []time.Time{}, fmt.Errorf("Too many missed start time (> 100). Set or decrease .spec.startingDeadlineSeconds or check clock skew.")
@@ -199,7 +162,6 @@ func (a *NewTimebasedController) reconcileAutoscaler(p *policy, now time.Time) e
 	if len(times) > 1 {
 		glog.V(4).Infof("Multiple unmet start times for %s so only starting last one", nameForLog)
 	}
-	scheduledTime := times[len(times)-1]
 
 	currentReplicas := scale.Status.Replicas
 
@@ -228,29 +190,20 @@ func (a *NewTimebasedController) reconcileAutoscaler(p *policy, now time.Time) e
 	}
 }
 
-func buildConfigFromFlags(masterUrl, kubeconfigPath string) (*rest.Config, error) {
-	if kubeconfigPath == "" && masterUrl == "" {
-		kubeconfig, err := rest.InClusterConfig()
-		if err != nil {
-			return nil, err
-		}
-
-		return kubeconfig, nil
+func buildConfigFromFlags() (*rest.Config, error) {
+	kubeconfig, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, err
 	}
-
-	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		&clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfigPath},
-		&clientcmd.ConfigOverrides{ClusterInfo: api.Cluster{Server: masterUrl}}).ClientConfig()
+	return kubeconfig, nil
 }
 
-func CreateApiserverClient(apiserverHost string, kubeConfig string) (*kubernetes.Clientset, *rest.Config, error) {
-	cfg, err := buildConfigFromFlags(apiserverHost, kubeConfig)
+func CreateApiserverClient() (*kubernetes.Clientset, *rest.Config, error) {
+	cfg, err := buildConfigFromFlags()
 	if err != nil {
 		return nil, nil, err
 	}
 
-	cfg.QPS = defaultQPS
-	cfg.Burst = defaultBurst
 	cfg.ContentType = "application/vnd.kubernetes.protobuf"
 
 	log.Printf("Creating API server client for %s", cfg.Host)
@@ -279,7 +232,7 @@ func main() {
         log.Printf("Using kubeconfig file: %s", *argKubeConfigFile)
     }
 
-    apiserverClient, config, err := client.CreateApiserverClient(*argApiserverHost, *argKubeConfigFile)
+    apiserverClient, config, err := CreateApiserverClient()
     if err != nil {
         handleFatalInitError(err)
     }
@@ -290,10 +243,10 @@ func main() {
     }
     log.Printf("Successful initial request to the apiserver, version: %s", versionInfo.String())
 
-    urc := controller.NewTimebasedController(&controller.Configuration{
+    pc := controller.NewTimebasedController(&controller.Configuration{
         Client:       apiserverClient,
         ResyncPeriod: 5 * time.Minute,
     })
 
-    urc.Run()
+    pc.Run()
 }
