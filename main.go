@@ -129,10 +129,10 @@ func (a *TimebasedController) worker() {
 	pl := a.policyLister.Store.List()
 
 	// policies := pl.Items
-
+  // glog.Infof("the policy list was: %s", pl.string)
 	for _, pIf := range pl {
 		p := pIf.(*PolicyTab)
-		reconcileAutoscaler(p, time.Now())
+		return a.reconcileAutoscaler(p, time.Now())
 	}
 
 }
@@ -165,7 +165,7 @@ func getRecentUnmetScheduleTimes(p PolicyTab, now time.Time) ([]time.Time, error
 	return starts, nil
 }
 
-func (a *TimebasedController) reconcileAutoscaler(p *PolicyTab, now time.Time) error {
+func (a *TimebasedController) reconcileAutoscaler(p *PolicyTab, now time.Time) {
 
 	reference := fmt.Sprintf("%s/%s/%s", p.Spec.ScaleTargetRef.Kind, p.ObjectMeta.Namespace, p.Spec.ScaleTargetRef.Name)
 
