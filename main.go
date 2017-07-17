@@ -12,8 +12,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
-	extensionsclient "k8s.io/kubernetes/pkg/client/clientset_generated/clientset/typed/extensions/v1beta1"
-	autoscalingclient "k8s.io/kubernetes/pkg/client/clientset_generated/clientset/typed/autoscaling/v1"
+	extensionsclient "k8s.io/client-go/kubernetes/typed/extensions/v1beta1"
 	"k8s.io/client-go/rest"
 	"github.com/spf13/pflag"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -91,8 +90,6 @@ type TimebasedController struct {
 	cfg *Configuration
 
 	scaleNamespacer extensionsclient.ScalesGetter
-	hpaNamespacer   autoscalingclient.HorizontalPodAutoscalersGetter
-
   policyController cache.Controller
   policyLister     PolicyLister
 
@@ -129,15 +126,15 @@ func (a *TimebasedController) worker() {
 	pl := a.policyLister.Store.List()
 
 	// policies := pl.Items
-
+  // glog.Infof("the policy list was: %s", pl.string)
 	for _, pIf := range pl {
 		p := pIf.(*PolicyTab)
-		reconcileAutoscaler(p, time.Now())
+		a.reconcileAutoscaler(p, time.Now())
 	}
 
 }
 
-func getRecentUnmetScheduleTimes(p PolicyTab, now time.Time) ([]time.Time, error) {
+func getRecentUnmetScheduleTimes(p *PolicyTab, now time.Time) ([]time.Time, error) {
 	starts := []time.Time{}
 	sched, err := cron.ParseStandard(p.Spec.Schedule)
 	if err != nil {
@@ -165,53 +162,49 @@ func getRecentUnmetScheduleTimes(p PolicyTab, now time.Time) ([]time.Time, error
 	return starts, nil
 }
 
-func (a *TimebasedController) reconcileAutoscaler(p *PolicyTab, now time.Time) error {
+func (a *TimebasedController) reconcileAutoscaler(p *PolicyTab, now time.Time) {
 
 	reference := fmt.Sprintf("%s/%s/%s", p.Spec.ScaleTargetRef.Kind, p.ObjectMeta.Namespace, p.Spec.ScaleTargetRef.Name)
 
 	scale, err := a.scaleNamespacer.Scales(p.ObjectMeta.Namespace).Get(p.Spec.ScaleTargetRef.Kind, p.Spec.ScaleTargetRef.Name)
 	if err != nil {
-		return fmt.Errorf("failed to query scale subresource for %s: %v", reference, err)
+		glog.Errorf("failed to query scale subresource for %s: %v", reference, err)
+		return
 	}
 
-	times, err := getRecentUnmetScheduleTimes(*p, now)
+	times, err := getRecentUnmetScheduleTimes(p, now)
 	if err != nil {
 		glog.Errorf("Cannot determine needs to be started: %v", err)
 	}
 	// TODO: handle multiple unmet start times, from oldest to newest, updating status as needed.
-	if len(times) == 0 {
+	if len(times) <= 0 {
 		glog.V(4).Infof("No unmet start times")
 		return
 	}
-	if len(times) > 1 {
-		glog.V(4).Infof("Multiple unmet start times so only starting last one")
-	}
+
+	glog.V(4).Infof("Multiple unmet start times so only starting last one")
 
 	currentReplicas := scale.Status.Replicas
 
 	if p.Spec.Action == ScaleUp {
 		if p.Spec.TargetReplicas <= currentReplicas {
 			glog.V(4).Infof("The request replicas was less than current replicas, no need to scale up")
-			return
 		} else {
 			scale.Spec.Replicas = p.Spec.TargetReplicas
 			_, err = a.scaleNamespacer.Scales(p.ObjectMeta.Namespace).Update(p.Spec.ScaleTargetRef.Kind, scale)
 			if err != nil {
-				return fmt.Errorf("failed to rescale %s: %v", reference, err)
+				fmt.Errorf("failed to rescale %s: %v", reference, err)
 			}
-			return
 		}
 	} else {
 		if p.Spec.TargetReplicas >= currentReplicas {
 			glog.V(4).Infof("the request replicas was large than replicas, no need to scale down")
-			return
 		} else {
 			scale.Spec.Replicas = p.Spec.TargetReplicas
 			_, err = a.scaleNamespacer.Scales(p.ObjectMeta.Namespace).Update(p.Spec.ScaleTargetRef.Kind, scale)
 			if err != nil {
-				return fmt.Errorf("failed to rescale %s: %v", reference, err)
+				fmt.Errorf("failed to rescale %s: %v", reference, err)
 			}
-			return
 		}
 	}
 }
@@ -230,7 +223,7 @@ func CreateApiserverClient() (*kubernetes.Clientset, *rest.Config, error) {
 		return nil, nil, err
 	}
 
-	cfg.ContentType = "application/vnd.kubernetes.protobuf"
+	cfg.ContentType = "application/json"
 
 	log.Printf("Creating API server client for %s", cfg.Host)
 
@@ -250,7 +243,7 @@ func main() {
     pflag.Parse()
     flag.CommandLine.Parse(make([]string, 0)) // Init for glog calls in kubernetes packages
 
-    apiserverClient, config, err := CreateApiserverClient()
+    apiserverClient, _, err := CreateApiserverClient()
     if err != nil {
         handleFatalInitError(err)
     }
@@ -266,7 +259,9 @@ func main() {
         ResyncPeriod: 5 * time.Minute,
     })
 
-    pc.Run()
+		stop := make(chan struct{})
+
+    pc.Run(stop)
 }
 
 func handleFatalInitError(err error) {
