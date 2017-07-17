@@ -12,8 +12,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
-	extensionsclient "k8s.io/kubernetes/pkg/client/clientset_generated/clientset/typed/extensions/v1beta1"
-	autoscalingclient "k8s.io/kubernetes/pkg/client/clientset_generated/clientset/typed/autoscaling/v1"
+	extensionsclient "k8s.io/client-go/kubernetes/typed/extensions/v1beta1"
 	"k8s.io/client-go/rest"
 	"github.com/spf13/pflag"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -91,8 +90,6 @@ type TimebasedController struct {
 	cfg *Configuration
 
 	scaleNamespacer extensionsclient.ScalesGetter
-	hpaNamespacer   autoscalingclient.HorizontalPodAutoscalersGetter
-
   policyController cache.Controller
   policyLister     PolicyLister
 
