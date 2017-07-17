@@ -166,7 +166,10 @@ func getRecentUnmetScheduleTimes(p PolicyTab, now time.Time) ([]time.Time, error
 }
 
 func (a *TimebasedController) reconcileAutoscaler(p *PolicyTab, now time.Time) error {
+<<<<<<< HEAD
 
+=======
+>>>>>>> 48914fef68eae3954be65ef2a7cf1f6b148ad2d5
 
 	reference := fmt.Sprintf("%s/%s/%s", p.Spec.ScaleTargetRef.Kind, p.ObjectMeta.Namespace, p.Spec.ScaleTargetRef.Name)
 
