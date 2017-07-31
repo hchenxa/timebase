@@ -1,226 +1,54 @@
 package main
 
 import (
-	"fmt"
-	"time"
+	"flag"
 	"log"
 	"os"
-	"flag"
+	"time"
 
-	"github.com/golang/glog"
-	"github.com/robfig/cron"
-	"k8s.io/client-go/kubernetes"
-	clientset "k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/cache"
-	extensionsclient "k8s.io/client-go/kubernetes/typed/extensions/v1beta1"
-	"k8s.io/client-go/rest"
 	"github.com/spf13/pflag"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
-	"k8s.io/apimachinery/pkg/util/wait"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
+	policyapi "github.com/hchenxa/timebase/pkg/api"
+	"github.com/hchenxa/timebase/pkg/controller"
 )
 
-const (
-	// A path to the endpoint for the CronTab custom resources.
-	policyEndpoint = "http://%s/apis/alpha.ianlewis.org/v1/namespaces/%s/policies"
+var (
+	argApiserverHost = pflag.String("apiserver-host", "", "The address of the Kubernetes Apiserver "+
+		"to connect to in the format of protocol://address:port, e.g., "+
+		"http://localhost:8080. If not specified, the assumption is that the binary runs inside a "+
+		"Kubernetes cluster and local discovery is attempted.")
+	argKubeConfigFile = pflag.String("kubeconfig", "", "Path to kubeconfig file with authorization and master location information.")
 )
-
 
 // lables correspond to labels in the Kubernetes API.
 type labels *map[string]string
 
-// objectMeta corresponds to object metadata in the Kubernetes API.
-type objectMeta struct {
-	Name            string `json:"name"`
-	UID             string `json:"uid,omitempty"`
-	ResourceVersion string `json:"resourceVersion,omitempty"`
-	Labels          labels `json:"labels,omitempty"`
-	Namespace string `json:"namespace,omitempty" protobuf:"bytes,3,opt,name=namespace"`
-}
-//
-// type policyList struct {
-// 	Items []PolicyTab `json:"items"`
-// }
-
-// cronTab represents a JSON object for the CronTab custom resource that we register in the Kubernetes API.
-type PolicyTab struct {
-	// The following fields mirror the fields in the third party resource.
-	metav1.TypeMeta `json:",inline"`
-	ObjectMeta objectMeta `json:"metadata,omitempty"`
-	Status     Status    `json:"status"`
-	Spec       policySpec `json:"spec"`
-}
-
-type Status struct {
-	CreationTimestamp *metav1.Time
-	LastScheduleTime *metav1.Time
-}
-
-type policySpec struct {
-	Action      ActionSpec      `json:"action"`
-	Schedule    string          `json:"schedule"`
-	ScaleTargetRef   CrossVersionObjectReference  `json:"scaleTargetRef" protobuf:"bytes,1,opt,name=scaleTargetRef"`
-	TargetReplicas int32 `json:"replicas,omitempty" protobuf:"varint,2,opt,name=replicas"`
-}
-
-type CrossVersionObjectReference struct {
-	// Kind of the referent; More info: https://git.k8s.io/community/contributors/devel/api-conventions.md#types-kinds"
-	Kind string `json:"kind" protobuf:"bytes,1,opt,name=kind"`
-	// Name of the referent; More info: http://kubernetes.io/docs/user-guide/identifiers#names
-	Name string `json:"name" protobuf:"bytes,2,opt,name=name"`
-	// API version of the referent
-	// +optional
-	APIVersion string `json:"apiVersion,omitempty" protobuf:"bytes,3,opt,name=apiVersion"`
-}
-
-type ActionSpec string
-
-const (
-	ScaleUp ActionSpec = "scaleUp"
-	ScaleDown ActionSpec = "scaleDown"
-)
-
-type PolicyLister struct {
-	cache.Store
-}
-
-type TimebasedController struct {
-	cfg *Configuration
-
-	scaleNamespacer extensionsclient.ScalesGetter
-  policyController cache.Controller
-  policyLister     PolicyLister
-
-  stopCh chan struct{}
-}
-
-type Configuration struct {
-	Client       clientset.Interface
-	ResyncPeriod time.Duration
-}
-
-func NewTimebasedController(config *Configuration) *TimebasedController {
-	policy := TimebasedController{
-		cfg:    config,
-		stopCh: make(chan struct{}),
-	}
-
-	policy.policyLister.Store, policy.policyController = cache.NewInformer(
-		cache.NewListWatchFromClient(policy.cfg.Client.Apps().RESTClient(), "policies", v1.NamespaceAll, fields.Everything()),
-		&PolicyTab{}, policy.cfg.ResyncPeriod, cache.ResourceEventHandlerFuncs{})
-
-	return &policy
-}
-
-func (a *TimebasedController) Run(stopCh <-chan struct{}) {
-	// start a single worker (we may wish to start more in the future)
-	go wait.Until(a.worker, time.Second, stopCh)
-
-	<-stopCh
-}
-
-func (a *TimebasedController) worker() {
-
-	pl := a.policyLister.Store.List()
-
-	// policies := pl.Items
-  // glog.Infof("the policy list was: %s", pl.string)
-	for _, pIf := range pl {
-		p := pIf.(*PolicyTab)
-		a.reconcileAutoscaler(p, time.Now())
-	}
-
-}
-
-func getRecentUnmetScheduleTimes(p *PolicyTab, now time.Time) ([]time.Time, error) {
-	starts := []time.Time{}
-	sched, err := cron.ParseStandard(p.Spec.Schedule)
-	if err != nil {
-		return starts, fmt.Errorf("Unparseable schedule: %s : %s", p.Spec.Schedule, err)
-	}
-
-	var earliestTime time.Time
-	if p.Status.LastScheduleTime != nil {
-		earliestTime = p.Status.LastScheduleTime.Time
-	} else {
-		earliestTime = p.Status.CreationTimestamp.Time
-	}
-	if earliestTime.After(now) {
-		return []time.Time{}, nil
-	}
-
-	for t := sched.Next(earliestTime); !t.After(now); t = sched.Next(t) {
-		starts = append(starts, t)
-
-		if len(starts) > 100 {
-			// We can't get the most recent times so just return an empty slice
-			return []time.Time{}, fmt.Errorf("Too many missed start time (> 100). Set or decrease .spec.startingDeadlineSeconds or check clock skew.")
+func buildConfigFromFlags(masterUrl, kubeconfigPath string) (*rest.Config, error) {
+	if kubeconfigPath == "" && masterUrl == "" {
+		kubeconfig, err := rest.InClusterConfig()
+		if err != nil {
+			return nil, err
 		}
+		return kubeconfig, nil
 	}
-	return starts, nil
+
+	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		&clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfigPath},
+		&clientcmd.ConfigOverrides{ClusterInfo: clientcmdapi.Cluster{Server: masterUrl}}).ClientConfig()
 }
 
-func (a *TimebasedController) reconcileAutoscaler(p *PolicyTab, now time.Time) {
-
-	reference := fmt.Sprintf("%s/%s/%s", p.Spec.ScaleTargetRef.Kind, p.ObjectMeta.Namespace, p.Spec.ScaleTargetRef.Name)
-
-	scale, err := a.scaleNamespacer.Scales(p.ObjectMeta.Namespace).Get(p.Spec.ScaleTargetRef.Kind, p.Spec.ScaleTargetRef.Name)
-	if err != nil {
-		glog.Errorf("failed to query scale subresource for %s: %v", reference, err)
-		return
-	}
-
-	times, err := getRecentUnmetScheduleTimes(p, now)
-	if err != nil {
-		glog.Errorf("Cannot determine needs to be started: %v", err)
-	}
-	// TODO: handle multiple unmet start times, from oldest to newest, updating status as needed.
-	if len(times) <= 0 {
-		glog.V(4).Infof("No unmet start times")
-		return
-	}
-
-	glog.V(4).Infof("Multiple unmet start times so only starting last one")
-
-	currentReplicas := scale.Status.Replicas
-
-	if p.Spec.Action == ScaleUp {
-		if p.Spec.TargetReplicas <= currentReplicas {
-			glog.V(4).Infof("The request replicas was less than current replicas, no need to scale up")
-		} else {
-			scale.Spec.Replicas = p.Spec.TargetReplicas
-			_, err = a.scaleNamespacer.Scales(p.ObjectMeta.Namespace).Update(p.Spec.ScaleTargetRef.Kind, scale)
-			if err != nil {
-				fmt.Errorf("failed to rescale %s: %v", reference, err)
-			}
-		}
-	} else {
-		if p.Spec.TargetReplicas >= currentReplicas {
-			glog.V(4).Infof("the request replicas was large than replicas, no need to scale down")
-		} else {
-			scale.Spec.Replicas = p.Spec.TargetReplicas
-			_, err = a.scaleNamespacer.Scales(p.ObjectMeta.Namespace).Update(p.Spec.ScaleTargetRef.Kind, scale)
-			if err != nil {
-				fmt.Errorf("failed to rescale %s: %v", reference, err)
-			}
-		}
-	}
-}
-
-func buildConfigFromFlags() (*rest.Config, error) {
-	kubeconfig, err := rest.InClusterConfig()
+func CreateApiserverClient(apiserverHost, kubeConfig string) (*kubernetes.Clientset, error) {
+	cfg, err := buildConfigFromFlags(apiserverHost, kubeConfig)
 	if err != nil {
 		return nil, err
-	}
-	return kubeconfig, nil
-}
-
-func CreateApiserverClient() (*kubernetes.Clientset, *rest.Config, error) {
-	cfg, err := buildConfigFromFlags()
-	if err != nil {
-		return nil, nil, err
 	}
 
 	cfg.ContentType = "application/json"
@@ -229,39 +57,64 @@ func CreateApiserverClient() (*kubernetes.Clientset, *rest.Config, error) {
 
 	client, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	return client, cfg, nil
+	return client, nil
+}
+
+func CreateRestClient(apiserverHost, kubeConfig string) (*rest.RESTClient, error) {
+	cfg, err := buildConfigFromFlags(apiserverHost, kubeConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg.GroupVersion = &schema.GroupVersion{
+		Group:   policyapi.APIGroup,
+		Version: policyapi.APIVersion,
+	}
+	cfg.APIPath = "/apis"
+	cfg.ContentType = runtime.ContentTypeJSON
+	cfg.NegotiatedSerializer = serializer.DirectCodecFactory{CodecFactory: scheme.Codecs}
+
+	schemeBuilder := runtime.NewSchemeBuilder(policyapi.AddKnownTypes)
+	schemeBuilder.AddToScheme(runtime.NewScheme())
+
+	return rest.RESTClientFor(cfg)
 }
 
 func main() {
-    // Set logging output to standard console out
-    log.SetOutput(os.Stdout)
+	// Set logging output to standard console out
+	log.SetOutput(os.Stdout)
 
-    pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
-    pflag.Parse()
-    flag.CommandLine.Parse(make([]string, 0)) // Init for glog calls in kubernetes packages
+	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
+	pflag.Parse()
+	flag.CommandLine.Parse(make([]string, 0)) // Init for glog calls in kubernetes packages
 
-    apiserverClient, _, err := CreateApiserverClient()
-    if err != nil {
-        handleFatalInitError(err)
-    }
+	apiserverClient, err := CreateApiserverClient(*argApiserverHost, *argKubeConfigFile)
+	if err != nil {
+		handleFatalInitError(err)
+	}
 
-    versionInfo, err := apiserverClient.ServerVersion()
-    if err != nil {
-        handleFatalInitError(err)
-    }
-    log.Printf("Successful initial request to the apiserver, version: %s", versionInfo.String())
+	restClient, err := CreateRestClient(*argApiserverHost, *argKubeConfigFile)
+	if err != nil {
+		handleFatalInitError(err)
+	}
 
-    pc := NewTimebasedController(&Configuration{
-        Client:       apiserverClient,
-        ResyncPeriod: 5 * time.Minute,
-    })
+	versionInfo, err := apiserverClient.ServerVersion()
+	if err != nil {
+		handleFatalInitError(err)
+	}
+	log.Printf("Successful initial request to the apiserver, version: %s", versionInfo.String())
 
-		stop := make(chan struct{})
+	pc := controller.NewTimebasedController(&controller.Configuration{
+		Client:       restClient,
+		ResyncPeriod: 5 * time.Minute,
+	})
 
-    pc.Run(stop)
+	stop := make(chan struct{})
+
+	pc.Run(stop)
 }
 
 func handleFatalInitError(err error) {
