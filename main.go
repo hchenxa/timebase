@@ -31,8 +31,8 @@ var (
 // lables correspond to labels in the Kubernetes API.
 type labels *map[string]string
 
-func buildConfigFromFlags(masterUrl, kubeconfigPath string) (*rest.Config, error) {
-	if kubeconfigPath == "" && masterUrl == "" {
+func buildConfigFromFlags(masterURL, kubeconfigPath string) (*rest.Config, error) {
+	if kubeconfigPath == "" && masterURL == "" {
 		kubeconfig, err := rest.InClusterConfig()
 		if err != nil {
 			return nil, err
@@ -42,9 +42,10 @@ func buildConfigFromFlags(masterUrl, kubeconfigPath string) (*rest.Config, error
 
 	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		&clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfigPath},
-		&clientcmd.ConfigOverrides{ClusterInfo: clientcmdapi.Cluster{Server: masterUrl}}).ClientConfig()
+		&clientcmd.ConfigOverrides{ClusterInfo: clientcmdapi.Cluster{Server: masterURL}}).ClientConfig()
 }
 
+// CreateApiserverClient create a clientset
 func CreateApiserverClient(apiserverHost, kubeConfig string) (*kubernetes.Clientset, error) {
 	cfg, err := buildConfigFromFlags(apiserverHost, kubeConfig)
 	if err != nil {
@@ -63,6 +64,7 @@ func CreateApiserverClient(apiserverHost, kubeConfig string) (*kubernetes.Client
 	return client, nil
 }
 
+// CreateRestClient creates a rest client
 func CreateRestClient(apiserverHost, kubeConfig string) (*rest.RESTClient, error) {
 	cfg, err := buildConfigFromFlags(apiserverHost, kubeConfig)
 	if err != nil {
