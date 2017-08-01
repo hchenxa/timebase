@@ -55,6 +55,8 @@ func NewTimebasedController(config *Configuration) *TimebasedController {
 
 // Run method start the controller
 func (a *TimebasedController) Run(stopCh <-chan struct{}) {
+	// Start controller
+	go a.policyController.Run(stopCh)
 	// start a single worker (we may wish to start more in the future)
 	go wait.Until(a.worker, time.Second, stopCh)
 
