@@ -49,6 +49,7 @@ func main() {
 
 	pc := controller.NewTimebasedController(&controller.Configuration{
 		Client:       restClient,
+		Scheme:       scheme,
 		ResyncPeriod: 5 * time.Minute,
 	})
 

@@ -8,6 +8,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
 	policyapi "github.com/hchenxa/timebase/pkg/api/icp.ibm.com/v1"
 )
@@ -49,7 +50,7 @@ func CreateApiserverClient(apiserverHost, kubeConfig string) (*kubernetes.Client
 func CreateRestClient(apiserverHost, kubeConfig string) (*rest.RESTClient, *runtime.Scheme, error) {
 	scheme := runtime.NewScheme()
 	if err := policyapi.AddToScheme(scheme); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	cfg, err := buildConfigFromFlags(apiserverHost, kubeConfig)
