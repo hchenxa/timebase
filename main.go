@@ -48,7 +48,8 @@ func main() {
 	log.Printf("Successful initial request to the apiserver, version: %s", versionInfo.String())
 
 	pc := controller.NewTimebasedController(&controller.Configuration{
-		Client:       restClient,
+		RESTClient:   restClient,
+		Client:       apiserverClient,
 		Scheme:       scheme,
 		ResyncPeriod: 5 * time.Minute,
 	})

@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/kubernetes"
 	extensionsclient "k8s.io/client-go/kubernetes/typed/extensions/v1beta1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
@@ -25,7 +26,8 @@ type PolicyLister struct {
 
 // Configuration is the controller configuration
 type Configuration struct {
-	Client       *rest.RESTClient
+	RESTClient   *rest.RESTClient
+	Client       *kubernetes.Clientset
 	Scheme       *runtime.Scheme
 	ResyncPeriod time.Duration
 }
@@ -48,8 +50,10 @@ func NewTimebasedController(config *Configuration) *TimebasedController {
 		stopCh: make(chan struct{}),
 	}
 
+	policy.scaleNamespacer = policy.cfg.Client.Extensions()
+
 	policy.policyLister.Store, policy.policyController = cache.NewInformer(
-		cache.NewListWatchFromClient(policy.cfg.Client, "policies", v1.NamespaceAll, fields.Everything()),
+		cache.NewListWatchFromClient(policy.cfg.RESTClient, "policies", v1.NamespaceAll, fields.Everything()),
 		&api.Policy{}, policy.cfg.ResyncPeriod, cache.ResourceEventHandlerFuncs{})
 
 	return &policy
