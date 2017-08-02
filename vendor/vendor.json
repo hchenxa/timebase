@@ -171,6 +171,12 @@
 			"revisionTime": "2017-05-23T01:21:41Z"
 		},
 		{
+			"checksumSHA1": "shhJa14NpmhvOtWm36ib1aXmT60=",
+			"path": "github.com/kubernetes/repo-infra/verify/boilerplate",
+			"revision": "f521b5d472e00e05da5394994942064510a6e8bf",
+			"revisionTime": "2017-07-27T20:41:02Z"
+		},
+		{
 			"checksumSHA1": "T8soMJArSZrYnhmdpAnq1bVxQ6Q=",
 			"path": "github.com/mailru/easyjson/buffer",
 			"revision": "2f5df55504ebc322e4d52d34df6a1f5b503bf26d",
