@@ -7,16 +7,8 @@ import (
 	"time"
 
 	"github.com/spf13/pflag"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/runtime/serializer"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
-	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
-	policyapi "github.com/hchenxa/timebase/pkg/api"
+	"github.com/hchenxa/timebase/pkg/client"
 	"github.com/hchenxa/timebase/pkg/controller"
 )
 
@@ -31,60 +23,6 @@ var (
 // lables correspond to labels in the Kubernetes API.
 type labels *map[string]string
 
-func buildConfigFromFlags(masterURL, kubeconfigPath string) (*rest.Config, error) {
-	if kubeconfigPath == "" && masterURL == "" {
-		kubeconfig, err := rest.InClusterConfig()
-		if err != nil {
-			return nil, err
-		}
-		return kubeconfig, nil
-	}
-
-	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		&clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfigPath},
-		&clientcmd.ConfigOverrides{ClusterInfo: clientcmdapi.Cluster{Server: masterURL}}).ClientConfig()
-}
-
-// CreateApiserverClient create a clientset
-func CreateApiserverClient(apiserverHost, kubeConfig string) (*kubernetes.Clientset, error) {
-	cfg, err := buildConfigFromFlags(apiserverHost, kubeConfig)
-	if err != nil {
-		return nil, err
-	}
-
-	cfg.ContentType = "application/json"
-
-	log.Printf("Creating API server client for %s", cfg.Host)
-
-	client, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	return client, nil
-}
-
-// CreateRestClient creates a rest client
-func CreateRestClient(apiserverHost, kubeConfig string) (*rest.RESTClient, error) {
-	cfg, err := buildConfigFromFlags(apiserverHost, kubeConfig)
-	if err != nil {
-		return nil, err
-	}
-
-	cfg.GroupVersion = &schema.GroupVersion{
-		Group:   policyapi.APIGroup,
-		Version: policyapi.APIVersion,
-	}
-	cfg.APIPath = "/apis"
-	cfg.ContentType = runtime.ContentTypeJSON
-	cfg.NegotiatedSerializer = serializer.DirectCodecFactory{CodecFactory: scheme.Codecs}
-
-	schemeBuilder := runtime.NewSchemeBuilder(policyapi.AddKnownTypes)
-	schemeBuilder.AddToScheme(runtime.NewScheme())
-
-	return rest.RESTClientFor(cfg)
-}
-
 func main() {
 	// Set logging output to standard console out
 	log.SetOutput(os.Stdout)
@@ -93,12 +31,12 @@ func main() {
 	pflag.Parse()
 	flag.CommandLine.Parse(make([]string, 0)) // Init for glog calls in kubernetes packages
 
-	apiserverClient, err := CreateApiserverClient(*argApiserverHost, *argKubeConfigFile)
+	apiserverClient, err := client.CreateApiserverClient(*argApiserverHost, *argKubeConfigFile)
 	if err != nil {
 		handleFatalInitError(err)
 	}
 
-	restClient, err := CreateRestClient(*argApiserverHost, *argKubeConfigFile)
+	restClient, scheme, err := client.CreateRestClient(*argApiserverHost, *argKubeConfigFile)
 	if err != nil {
 		handleFatalInitError(err)
 	}

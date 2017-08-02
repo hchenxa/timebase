@@ -9,12 +9,13 @@ import (
 	"github.com/robfig/cron"
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	extensionsclient "k8s.io/client-go/kubernetes/typed/extensions/v1beta1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/hchenxa/timebase/pkg/api"
+	api "github.com/hchenxa/timebase/pkg/api/icp.ibm.com/v1"
 )
 
 // PolicyLister is to store list of policies
@@ -25,6 +26,7 @@ type PolicyLister struct {
 // Configuration is the controller configuration
 type Configuration struct {
 	Client       *rest.RESTClient
+	Scheme       *runtime.Scheme
 	ResyncPeriod time.Duration
 }
 
@@ -48,7 +50,7 @@ func NewTimebasedController(config *Configuration) *TimebasedController {
 
 	policy.policyLister.Store, policy.policyController = cache.NewInformer(
 		cache.NewListWatchFromClient(policy.cfg.Client, "policies", v1.NamespaceAll, fields.Everything()),
-		&api.PolicyTab{}, policy.cfg.ResyncPeriod, cache.ResourceEventHandlerFuncs{})
+		&api.Policy{}, policy.cfg.ResyncPeriod, cache.ResourceEventHandlerFuncs{})
 
 	return &policy
 }
@@ -70,13 +72,13 @@ func (a *TimebasedController) worker() {
 	// policies := pl.Items
 	// glog.Infof("the policy list was: %s", pl.string)
 	for _, pIf := range pl {
-		p := pIf.(*api.PolicyTab)
+		p := pIf.(*api.Policy)
 		a.reconcileAutoscaler(p, time.Now())
 	}
 
 }
 
-func getRecentUnmetScheduleTimes(p *api.PolicyTab, now time.Time) ([]time.Time, error) {
+func getRecentUnmetScheduleTimes(p *api.Policy, now time.Time) ([]time.Time, error) {
 	starts := []time.Time{}
 	sched, err := cron.ParseStandard(p.Spec.Schedule)
 	if err != nil {
@@ -104,7 +106,7 @@ func getRecentUnmetScheduleTimes(p *api.PolicyTab, now time.Time) ([]time.Time, 
 	return starts, nil
 }
 
-func (a *TimebasedController) reconcileAutoscaler(p *api.PolicyTab, now time.Time) {
+func (a *TimebasedController) reconcileAutoscaler(p *api.Policy, now time.Time) {
 
 	reference := fmt.Sprintf("%s/%s/%s", p.Spec.ScaleTargetRef.Kind, p.ObjectMeta.Namespace, p.Spec.ScaleTargetRef.Name)
 
