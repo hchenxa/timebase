@@ -35,9 +35,9 @@ type PolicySpec struct {
 // Policy represents a JSON object for the CronTab custom resource that we register in the Kubernetes API.
 type Policy struct {
 	// The following fields mirror the fields in the third party resource.
-	metav1.TypeMeta `json:",inline"`
-	ObjectMeta      metav1.ObjectMeta `json:"metadata"`
-	Spec            PolicySpec        `json:"spec"`
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata"`
+	Spec              PolicySpec `json:"spec"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
