@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/golang/glog"
-
+        metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"github.com/robfig/cron"
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -93,7 +93,7 @@ func getRecentUnmetScheduleTimes(p *api.Policy, now time.Time) ([]time.Time, err
 	if p.Spec.Status.LastScheduleTime != nil {
 		earliestTime = p.Spec.Status.LastScheduleTime.Time
 	} else {
-		earliestTime = p.Spec.Status.CreationTimestamp.Time
+		earliestTime = p.ObjectMeta.CreationTimestamp.Time
 	}
 	if earliestTime.After(now) {
 		return []time.Time{}, nil
@@ -142,7 +142,9 @@ func (a *TimebasedController) reconcileAutoscaler(p *api.Policy, now time.Time) 
 			_, err = a.scaleNamespacer.Scales(p.ObjectMeta.Namespace).Update(p.Spec.ScaleTargetRef.Kind, scale)
 			if err != nil {
 				glog.Errorf("failed to rescale %s: %v", reference, err)
+				return
 			}
+			p.Spec.Status.LastScheduleTime = &metav1.Time{Time: now}
 		}
 	} else {
 		if p.Spec.TargetReplicas >= currentReplicas {
@@ -152,7 +154,9 @@ func (a *TimebasedController) reconcileAutoscaler(p *api.Policy, now time.Time) 
 			_, err = a.scaleNamespacer.Scales(p.ObjectMeta.Namespace).Update(p.Spec.ScaleTargetRef.Kind, scale)
 			if err != nil {
 				glog.Errorf("failed to rescale %s: %v", reference, err)
+				return
 			}
+			p.Spec.Status.LastScheduleTime = &metav1.Time{Time: now}
 		}
 	}
 }
