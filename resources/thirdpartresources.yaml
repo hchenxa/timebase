@@ -1,0 +1,7 @@
+metadata:
+  name: policy.icp.ibm.com
+apiVersion: extensions/v1beta1
+kind: ThirdPartyResource
+description: "A specification of a time based policy"
+versions:
+  - name: v1

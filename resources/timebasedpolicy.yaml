@@ -1,0 +1,12 @@
+apiVersion: "icp.ibm.com/v1"
+kind: "Policy"
+metadata:
+  name: policy
+spec:
+  schedule: "*/2 * * * *"
+  scaleTargetRef:
+    apiVersion: extensions/v1beta1
+    kind: Deployment
+    name: nginx
+  replicas: 5
+  action: scaleUp
